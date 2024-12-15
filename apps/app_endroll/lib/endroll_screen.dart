@@ -1,4 +1,4 @@
-import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -9,10 +9,14 @@ class EndrollScreen extends StatefulWidget {
   _EndrollScreenState createState() => _EndrollScreenState();
 }
 
-class _EndrollScreenState extends State<EndrollScreen> {
-  String credits = ""; // ファイルから読み込んだテキスト
+   
+class _EndrollScreenState extends State<EndrollScreen> with SingleTickerProviderStateMixin {
+  String credits = ""; // ファイルから読み込むテキスト
+  late AnimationController _animationController;
+  late Animation<double> _animation;
   late ScrollController _scrollController;
-  late Timer _timer;
+  double _scrollHeight = 0; // 全体の高さ
+  double _screenHeight = 0; // 画面の高さ
 
   @override
   void initState() {
@@ -28,30 +32,64 @@ class _EndrollScreenState extends State<EndrollScreen> {
       credits = text;
     });
 
-    // アニメーション開始
-    _startScrolling();
+    // ウィジェットのレンダリング完了後にスクロールアニメーションを開始
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _startAnimation();
+    });
   }
 
-  // スクロールアニメーション
-  void _startScrolling() {
-    const scrollDuration = Duration(seconds: 15); // アニメーションの長さ
-    const fps = 60;
-    final interval = scrollDuration.inMilliseconds ~/ fps;
+  // アニメーションの設定と開始
+  void _startAnimation() {
+    _screenHeight = MediaQuery.of(context).size.height;
 
-    _timer = Timer.periodic(Duration(milliseconds: interval), (timer) {
-      if (_scrollController.offset >= _scrollController.position.maxScrollExtent) {
-        timer.cancel();
-      } else {
-        _scrollController.jumpTo(
-          _scrollController.offset + _scrollController.position.maxScrollExtent / (scrollDuration.inMilliseconds / interval),
-        );
+    // 全体のスクロール高さを取得
+    setState(() {
+         
+      _scrollHeight = _scrollController.position.maxScrollExtent + _screenHeight;
+    });
+
+    // AnimationControllerの初期化
+    _animationController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 15), // アニメーションの総時間
+    );
+
+    // Tweenでスクロール位置を設定
+    _animation = Tween<double>(begin: 0.0, end:_scrollController.position.maxScrollExtent ).animate(CurvedAnimation(
+      parent: _animationController,
+      curve: Curves.linear, // なめらかにスクロールするカーブ
+    ));
+
+    // アニメーションの値をScrollControllerに反映
+    _animation.addListener(() {
+      if (_scrollController.hasClients) {
+        _scrollController.jumpTo(_animation.value);
       }
     });
+
+    // アニメーション終了時の動作
+    _animationController.addStatusListener((status) {
+      if (status == AnimationStatus.completed) {
+        // アニメーション終了時にスクロール位置を固定
+        if (_scrollController.hasClients) {
+          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+        }
+      }
+    });
+
+    // アニメーション開始
+    _animationController.forward();
+  }
+
+  // アニメーションをリセットして再生
+  void _restartAnimation() {
+    _animationController.reset(); // 最初の状態に戻す
+    _animationController.forward(); // 再度アニメーション開始
   }
 
   @override
   void dispose() {
-    _timer.cancel();
+    _animationController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -59,10 +97,11 @@ class _EndrollScreenState extends State<EndrollScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Endroll")),
+      appBar: AppBar(title: const Text("Smooth Endroll")),
       body: credits.isEmpty
           ? const Center(child: CircularProgressIndicator()) // 読み込み中
           : Stack(
+                          
               children: [
                 Container(
                   decoration: const BoxDecoration(
@@ -86,6 +125,11 @@ class _EndrollScreenState extends State<EndrollScreen> {
                 ),
               ],
             ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _restartAnimation, // ボタンが押されたときの動作
+        child: const Icon(Icons.refresh), // 再生マークとしてリフレッシュアイコンを使用
+        tooltip: "Restart Animation", // ツールチップ（ボタンの説明）
+      ),
     );
   }
 }

@@ -1,7 +1,5 @@
-import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'text_chunk_reader.dart';
 
 class EndrollDynamicScreen extends StatefulWidget {
   const EndrollDynamicScreen({super.key});
@@ -12,79 +10,80 @@ class EndrollDynamicScreen extends StatefulWidget {
 
 class _EndrollDynamicScreenState extends State<EndrollDynamicScreen>
     with SingleTickerProviderStateMixin {
+  final List<String> _lines = []; // 表示するテキストのリスト
   final ScrollController _scrollController = ScrollController();
   late AnimationController _animationController;
   late Animation<double> _animation;
 
-  final List<String> _lines = []; // 表示するテキストのリスト
-  final int _chunkSize = 100; // 1回のチャンクの行数
-  int _currentChunk = 0; // 現在のチャンクインデックス
-  late List<String> _allLines; // 全行（逐次読み込み用）
-  bool _isLoading = false; // 読み込み中フラグ
-  double _scrollHeight = 0; // 全体の高さ
+  late TextChunkReader _textChunkReader;
+  bool _isLoading = false;
+  bool _isAtEnd = false;
 
   @override
   void initState() {
     super.initState();
+    _textChunkReader = TextChunkReader('assets/credits.txt', chunkSize: 1024);
+
     _animationController = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 15), // デフォルトのアニメーション時間
+      duration: const Duration(seconds: 15),
     );
+
     _animationController.addListener(_animateScroll);
-    _scrollController.addListener(_loadMoreChunks);
+    _scrollController.addListener(_onScroll);
     _loadInitialChunk();
   }
 
-  // 初期チャンクを読み込む
+  // 初期チャンクをロード
   Future<void> _loadInitialChunk() async {
-    _allLines = await _loadTextLines();
-    _loadNextChunk();
+    final chunk = await _textChunkReader.readNextChunk();
+    setState(() {
+      _lines.addAll(chunk);
+    });
+
+    _startAnimation();
   }
 
-  // assets/texts/credits.txt を行単位で読み込む
-  Future<List<String>> _loadTextLines() async {
-    final text = await rootBundle.loadString('assets/credits.txt');
-    return LineSplitter.split(text).toList(); // 行ごとに分割
-  }
-
-  // 次のチャンクを読み込む
-  void _loadNextChunk() {
-    if (_isLoading || _currentChunk * _chunkSize >= _allLines.length) return;
+  // 次のチャンクをロード
+  Future<void> _loadNextChunk() async {
+    if (_isLoading || _isAtEnd) return;
 
     setState(() {
       _isLoading = true;
     });
 
-    // 現在のチャンクから次のチャンクをリストに追加
-    final start = _currentChunk * _chunkSize;
-    final end = (_currentChunk + 1) * _chunkSize;
-    final nextChunk = _allLines.sublist(
-        start, end > _allLines.length ? _allLines.length : end);
+    final chunk = await _textChunkReader.readNextChunk();
+
+    if (chunk.isEmpty) {
+      setState(() {
+        _isAtEnd = true;
+      });
+    }
 
     setState(() {
-      _lines.addAll(nextChunk);
-      _currentChunk++;
+      _lines.addAll(chunk);
       _isLoading = false;
-      _updateScrollHeight();
     });
   }
 
-  // スクロール範囲を更新
-  void _updateScrollHeight() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        setState(() {
-          _scrollHeight = _scrollController.position.maxScrollExtent;
-        });
-      }
-    });
+  // アニメーションを開始
+  void _startAnimation() {
+    final maxExtent = _scrollController.position.maxScrollExtent;
+    final endValue = maxExtent + _scrollController.position.viewportDimension;
+
+    _animation = Tween<double>(begin: 0, end: endValue).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.linear),
+    );
+
+    _animationController.reset();
+    _animationController.forward();
   }
 
-  // スクロールアニメーション
+  // アニメーションによるスクロール
   void _animateScroll() {
     if (_scrollController.hasClients) {
       final position = _animation.value;
-      if (position <= _scrollHeight) {
+      if (position <= _scrollController.position.maxScrollExtent) {
         _scrollController.jumpTo(position);
       } else {
         _animationController.stop();
@@ -92,20 +91,8 @@ class _EndrollDynamicScreenState extends State<EndrollDynamicScreen>
     }
   }
 
-  // アニメーションをリセットして再生
-  void _restartAnimation() {
-    _animationController.reset();
-    _animation = Tween<double>(
-      begin: 0.0,
-      end: _scrollHeight,
-    ).animate(
-      CurvedAnimation(parent: _animationController, curve: Curves.linear),
-    );
-    _animationController.forward();
-  }
-
-  // スクロールが下部に近づいた際のチャンク読み込み
-  void _loadMoreChunks() {
+  // スクロールイベントで次のチャンクをロード
+  void _onScroll() {
     if (_scrollController.position.pixels >=
             _scrollController.position.maxScrollExtent - 100 &&
         !_isLoading) {
@@ -115,8 +102,8 @@ class _EndrollDynamicScreenState extends State<EndrollDynamicScreen>
 
   @override
   void dispose() {
-    _animationController.dispose();
     _scrollController.dispose();
+    _animationController.dispose();
     super.dispose();
   }
 
@@ -132,12 +119,10 @@ class _EndrollDynamicScreenState extends State<EndrollDynamicScreen>
             itemBuilder: (context, index) {
               if (index < _lines.length) {
                 return Padding(
-                  padding: const EdgeInsets.symmetric(
-                      vertical: 4.0, horizontal: 16.0),
+                  padding: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 16.0),
                   child: Text(
                     _lines[index],
-                    style: const TextStyle(
-                        fontSize: 18, color: Colors.white, height: 1.5),
+                    style: const TextStyle(fontSize: 18, color: Colors.white, height: 1.5),
                     textAlign: TextAlign.center,
                   ),
                 );
@@ -151,14 +136,10 @@ class _EndrollDynamicScreenState extends State<EndrollDynamicScreen>
               }
             },
           ),
-          if (_isLoading)
-            const Center(
-              child: CircularProgressIndicator(),
-            ),
         ],
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: _restartAnimation,
+        onPressed: _startAnimation,
         child: const Icon(Icons.refresh),
         tooltip: "Restart Animation",
       ),
